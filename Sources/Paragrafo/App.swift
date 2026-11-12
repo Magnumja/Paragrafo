@@ -2,184 +2,200 @@ import SwiftUI
 @preconcurrency import Translation
 import UniformTypeIdentifiers
 
+// Disambiguate property wrappers from similarly named macros in newer SDKs.
 typealias ViewState<Value> = SwiftUI.State<Value>
+typealias ReaderStateObject<Value: ObservableObject> = SwiftUI.StateObject<Value>
 
 @main
 struct ParagrafoApp: App {
     var body: some Scene {
-        WindowGroup { ContentView().frame(minWidth: 820, minHeight: 580) }
-            .defaultSize(width: 1080, height: 760)
+        WindowGroup { ContentView().frame(minWidth: 780, minHeight: 580) }
+            .defaultSize(width: 1160, height: 800)
     }
 }
 
 struct ContentView: View {
-    @ViewState private var paragraphs: [Paragraph] = []
-    @ViewState private var filename: String = ""
-    @ViewState private var target: String = "pt"
-    @ViewState private var languages: [Locale.Language] = []
-    @ViewState private var importing: Bool = false
-    @ViewState private var busy: Bool = false
-    @ViewState private var stopped: Bool = false
-    @ViewState private var status: String = "Seus documentos, em outras palavras."
-    @ViewState private var error: String?
-    @ViewState private var configuration: TranslationSession.Configuration?
-    private let accent = Color(red: 0.22, green: 0.40, blue: 0.33)
-    private var completed: Int { paragraphs.filter { !$0.translated.isEmpty }.count }
+    @ReaderStateObject private var model = ReaderModel()
+    @ViewState private var importing = false
+    @ViewState private var translationOnly = false
+    @ViewState private var fontSize = 17.0
+    @ViewState private var dropTarget = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "text.book.closed").font(.title2).foregroundStyle(accent)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Parágrafo").font(.title3.weight(.semibold))
-                    Text(filename.isEmpty ? "Um PDF. Uma leitura sem fronteiras." : filename)
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer()
-                Button("Abrir PDF", systemImage: "plus") { importing = true }
-                    .keyboardShortcut("o").disabled(busy)
-                Button("Exportar", systemImage: "square.and.arrow.up") { export() }
-                    .disabled(completed == 0 || busy)
-            }.padding(24)
-            Divider()
-            if paragraphs.isEmpty {
-                Spacer()
-                Image(systemName: "doc.text.magnifyingglass").font(.system(size: 54, weight: .ultraLight)).foregroundStyle(accent)
-                Text("Leia além do idioma.").font(.system(size: 30, weight: .medium, design: .serif)).padding(.top, 16)
-                Text("Abra um PDF para comparar cada parágrafo\ncom sua tradução, no seu ritmo.")
-                    .multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.top, 6)
-                Button("Escolher PDF…") { importing = true }.buttonStyle(.borderedProminent).padding(.top, 20).disabled(busy)
-                Text("Texto e documentos digitalizados • Processamento no Mac")
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 16)
-                Spacer()
+            if model.document.isEmpty {
+                EmptyReader(importing: model.phase == .importing, open: { importing = true })
             } else {
-                HStack {
-                    Text("TRADUZIR PARA").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Picker("Idioma de destino", selection: $target) {
-                        if languages.isEmpty { Text("Português").tag("pt") }
-                        ForEach(languages, id: \.minimalIdentifier) { language in
-                            Text(languageName(language.minimalIdentifier)).tag(language.minimalIdentifier)
-                        }
-                    }.labelsHidden().frame(width: 180).disabled(busy)
-                        .onChange(of: target) { _, _ in
-                            for index in paragraphs.indices { paragraphs[index].translated = "" }
-                        }
-                    Spacer()
-                    Text("\(completed) / \(paragraphs.count)").monospacedDigit().foregroundStyle(.secondary)
-                    if busy {
-                        Button("Parar") { stopped = true }.disabled(stopped)
-                    } else {
-                        Button(completed > 0 ? "Continuar" : "Traduzir") { startTranslation() }
-                            .buttonStyle(.borderedProminent).disabled(completed == paragraphs.count)
-                    }
-                }.padding(20)
-                ScrollView {
-                    LazyVStack(spacing: 16) {
-                        ForEach($paragraphs) { $paragraph in
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text("PÁGINA \(paragraph.page) · PARÁGRAFO \((paragraphs.firstIndex(where: { $0.id == paragraph.id }) ?? 0) + 1)")
-                                    .font(.system(size: 10, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
-                                HStack(alignment: .top, spacing: 24) {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Original").font(.caption).foregroundStyle(.secondary)
-                                        Text(paragraph.original).frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 1)
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text(languageName(target)).font(.caption).foregroundStyle(accent)
-                                        Text(paragraph.translated.isEmpty ? "Aguardando tradução…" : paragraph.translated)
-                                            .foregroundStyle(paragraph.translated.isEmpty ? Color.secondary : Color.primary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }.font(.system(size: 16, design: .serif)).lineSpacing(6).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                            }.padding(24).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                        }
-                    }.padding(.horizontal, 24).padding(.bottom, 24)
+                HStack(spacing: 0) {
+                    sidebar
+                    Divider()
+                    readingPane
                 }
             }
-            Divider()
-            HStack(spacing: 10) {
-                if busy { ProgressView().controlSize(.small) }
-                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                Spacer()
-            }.padding(.horizontal, 24).padding(.vertical, 14)
+            statusBar
         }
-        .background(Color(nsColor: .windowBackgroundColor)).tint(accent)
+        .background(ReaderStyle.canvas)
+        .tint(ReaderStyle.accent)
+        .navigationTitle("Parágrafo")
+        .toolbar {
+            ToolbarItemGroup(placement: .automatic) {
+                Button("Abrir PDF", systemImage: "folder") { importing = true }
+                    .keyboardShortcut("o").disabled(model.busy)
+                Button("Exportar", systemImage: "square.and.arrow.up") { model.export() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(model.document.completed == 0 || model.busy)
+            }
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf]) { result in
             switch result {
-            case .success(let url): load(url)
-            case .failure(let failure): error = failure.localizedDescription
+            case .success(let url): model.load(url)
+            case .failure(let error): model.error = error.localizedDescription
             }
         }
-        .alert("Não foi possível concluir", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK") { error = nil }
-        } message: { Text(error ?? "") }
-        .task {
-            languages = await availableLanguages().sorted { languageName($0.minimalIdentifier) < languageName($1.minimalIdentifier) }
-            if !languages.contains(where: { $0.minimalIdentifier == target }), let portuguese = languages.first(where: { $0.languageCode?.identifier == "pt" }) { target = portuguese.minimalIdentifier }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !model.busy, let url = urls.first, url.pathExtension.lowercased() == "pdf" else { return false }
+            model.load(url)
+            return true
+        } isTargeted: { dropTarget = $0 }
+        .overlay {
+            if dropTarget && !model.busy {
+                RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderStyle.accent, style: StrokeStyle(lineWidth: 3, dash: [8]))
+                    .padding(10).allowsHitTesting(false)
+            }
         }
-        .translationTask(configuration) { session in
-            guard busy, !paragraphs.isEmpty else { return }
-            do {
-                try await session.prepareTranslation()
-                for index in paragraphs.indices {
-                    try Task.checkCancellation()
-                    if stopped { break }
-                    guard paragraphs[index].translated.isEmpty else { continue }
-                    status = "Traduzindo parágrafo \(index + 1) de \(paragraphs.count)…"
-                    let response = try await session.translate(paragraphs[index].original)
-                    paragraphs[index].translated = response.targetText
+        .alert("Não foi possível concluir", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+            Button("OK") { model.error = nil }
+        } message: { Text(model.error ?? "") }
+        .task { await model.loadLanguages() }
+        .translationTask(model.configuration) { session in await model.translate(using: session) }
+        .onChange(of: model.target) { _, _ in model.changeTarget() }
+        .onDisappear { if model.busy { model.stop() } }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.text").font(.title2).foregroundStyle(ReaderStyle.accent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.filename).font(.headline).lineLimit(2).help(model.filename)
+                    Text("\(model.document.pages.count) páginas com texto").font(.caption).foregroundStyle(.secondary)
                 }
-                status = stopped ? "Tradução pausada. Você pode continuar de onde parou." : "Tradução concluída. Compare com o original antes de usar."
-            } catch {
-                self.error = "A tradução foi interrompida. O idioma pode não ser compatível ou precisar de download. O progresso foi mantido.\n\n\(error.localizedDescription)"
-                status = "Tradução interrompida."
             }
-            busy = false
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("IDIOMA DE DESTINO")
+                Picker("Idioma de destino", selection: $model.target) {
+                    if model.languages.isEmpty { Text("Português").tag("pt") }
+                    ForEach(model.languages, id: \.minimalIdentifier) { language in
+                        Text(languageName(language.minimalIdentifier)).tag(language.minimalIdentifier)
+                    }
+                }.labelsHidden().disabled(model.busy).frame(maxWidth: .infinity)
+                Label("Origem automática", systemImage: "wand.and.stars").font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    sectionTitle("TRADUÇÃO")
+                    Spacer()
+                    Text("\(Int(progress * 100))%") .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                ProgressView(value: progress).accessibilityLabel("Progresso da tradução")
+                Text("\(model.document.completed) de \(model.document.count) parágrafos").font(.caption).foregroundStyle(.secondary)
+                if model.busy {
+                    Button(model.stopping ? "Aguarde…" : "Pausar", systemImage: "pause.fill") { model.stop() }
+                        .disabled(model.stopping).frame(maxWidth: .infinity)
+                } else {
+                    Button(model.document.completed == model.document.count ? "Concluído" : model.document.completed > 0 ? "Continuar tradução" : "Traduzir documento", systemImage: model.document.completed == model.document.count ? "checkmark" : "character.bubble") {
+                        model.startTranslation()
+                    }.buttonStyle(.borderedProminent).controlSize(.large)
+                        .disabled(model.document.completed == model.document.count)
+                }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("LEITURA")
+                Toggle("Só tradução", isOn: $translationOnly).toggleStyle(.switch).controlSize(.small)
+                HStack {
+                    Text("Texto").foregroundStyle(.secondary)
+                    Spacer()
+                    Button { fontSize = max(14, fontSize - 1) } label: { Image(systemName: "textformat.size.smaller") }
+                        .accessibilityLabel("Diminuir texto").disabled(fontSize <= 14)
+                    Text("\(Int(fontSize))").font(.caption.monospacedDigit()).frame(width: 20)
+                    Button { fontSize = min(24, fontSize + 1) } label: { Image(systemName: "textformat.size.larger") }
+                        .accessibilityLabel("Aumentar texto").disabled(fontSize >= 24)
+                }
+            }.font(.callout)
+            Spacer(minLength: 10)
+            Label("Processado no Mac", systemImage: "lock.shield")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("A tradução automática pode conter erros. Compare os trechos antes de usar.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(22).frame(width: 250).frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var readingPane: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(translationOnly ? "Sua tradução" : "Uma leitura, dois idiomas.")
+                        .font(.system(size: 23, weight: .medium, design: .serif))
+                    Text(translationOnly ? "Leitura contínua, parágrafo por parágrafo." : "O original sempre ao alcance dos olhos.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                pageNavigation
+            }.padding(24)
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if !model.notice.isEmpty {
+                        Label(model.notice, systemImage: "info.circle")
+                            .font(.caption).foregroundStyle(.secondary).padding(.bottom, 2)
+                    }
+                    ForEach(model.document.pageRanges[model.selectedPage] ?? 0..<0, id: \.self) { index in
+                        ParagraphCard(paragraph: model.document.paragraphs[index], number: index + 1,
+                                      targetName: languageName(model.target), translationOnly: translationOnly, fontSize: fontSize)
+                    }
+                }.padding(24).frame(maxWidth: 1100).frame(maxWidth: .infinity)
+            }.id(model.selectedPage)
         }
     }
 
-    private func languageName(_ code: String) -> String {
-        Locale(identifier: "pt_BR").localizedString(forIdentifier: code) ?? code
+    private var pageNavigation: some View {
+        HStack(spacing: 8) {
+            Button { movePage(-1) } label: { Image(systemName: "chevron.left") }
+                .accessibilityLabel("Página anterior").disabled(model.selectedPage == model.document.pages.first)
+            Picker("Página", selection: $model.selectedPage) {
+                ForEach(model.document.pages, id: \.self) { Text("Página \($0)").tag($0) }
+            }.labelsHidden().frame(width: 115)
+            Button { movePage(1) } label: { Image(systemName: "chevron.right") }
+                .accessibilityLabel("Próxima página").disabled(model.selectedPage == model.document.pages.last)
+        }.controlSize(.small)
     }
 
-    private func startTranslation() {
-        stopped = false
-        busy = true
-        status = "Preparando idiomas…"
-        let next = TranslationSession.Configuration(source: nil, target: Locale.Language(identifier: target))
-        if configuration == next { configuration?.invalidate() } else { configuration = next }
+    private var statusBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                if model.busy { ProgressView().controlSize(.small) }
+                else { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(ReaderStyle.accent) }
+                Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Spacer()
+                if model.phase == .importing {
+                    ProgressView(value: model.importProgress).frame(width: 100)
+                    Button("Cancelar") { model.stop() }.disabled(model.stopping).controlSize(.small)
+                }
+            }.padding(.horizontal, 22).padding(.vertical, 12)
+        }.background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private func load(_ url: URL) {
-        busy = true
-        configuration = nil
-        status = "Extraindo texto e reconhecendo páginas digitalizadas…"
-        Task {
-            do {
-                let result = try await Task.detached(priority: .userInitiated) { try PDFExtractor.extract(url: url) }.value
-                paragraphs = result.paragraphs
-                filename = url.lastPathComponent
-                status = "\(paragraphs.count) parágrafos · \(result.ocrPages) páginas com OCR. Confira a separação de parágrafos."
-                if !result.emptyPages.isEmpty { status += " Páginas sem texto: \(result.emptyPages.map(String.init).joined(separator: ", "))." }
-            } catch { self.error = error.localizedDescription; status = "Não foi possível importar o PDF." }
-            busy = false
-        }
+    private var progress: Double { Double(model.document.completed) / Double(max(1, model.document.count)) }
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text).font(.system(size: 10, weight: .semibold)).tracking(1.3).foregroundStyle(.secondary)
     }
-
-    private func export() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent + " — tradução.txt"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let text = "\(filename)\nTradução para \(languageName(target)) · \(completed)/\(paragraphs.count) parágrafos\n\n" + paragraphs.enumerated().map { index, paragraph in
-            "Página \(paragraph.page) · Parágrafo \(index + 1)\n\nORIGINAL\n\(paragraph.original)\n\nTRADUÇÃO\n\(paragraph.translated.isEmpty ? "[Não traduzido]" : paragraph.translated)"
-        }.joined(separator: "\n\n————————————\n\n")
-        do { try text.write(to: url, atomically: true, encoding: .utf8) }
-        catch { self.error = error.localizedDescription }
+    private func movePage(_ offset: Int) {
+        guard let index = model.document.pages.firstIndex(of: model.selectedPage), model.document.pages.indices.contains(index + offset) else { return }
+        model.selectedPage = model.document.pages[index + offset]
     }
-}
-
-private func availableLanguages() async -> [Locale.Language] {
-    await LanguageAvailability().supportedLanguages
 }

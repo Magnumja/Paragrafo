@@ -1,59 +1,58 @@
 # Parágrafo
 
-Aplicativo minimalista nativo em SwiftUI para macOS 15 ou posterior. Abra um PDF, escolha o idioma e leia original e tradução lado a lado, separados por parágrafos.
+App nativo em SwiftUI para macOS 15+, com leitura e tradução de PDFs por parágrafo.
 
 ## Executar
 
-Com Xcode 16+ ou Command Line Tools com Swift 6 instalados:
+Abra `dist/Parágrafo.app`. Para recompilar com Swift 6 / Xcode 16+:
 
 ```sh
 ./build-app.sh
 open "dist/Parágrafo.app"
 ```
 
-O script gera um aplicativo para a arquitetura do Mac que o compila, com assinatura local. Para distribuição pública, ainda é necessário assinar com Developer ID e notarizar. Também é possível abrir `Package.swift` no Xcode. Execute o `.app` gerado para usar o fluxo nativo de tradução.
+O projeto pode ser aberto no Xcode usando `Package.swift`. O script inclui a logo e gera um aplicativo para a arquitetura do Mac, com assinatura local. Distribuição pública ainda requer Developer ID e notarização.
 
-## Uso
+## Interface
 
-1. Clique em **Abrir PDF** (⌘O).
-2. Confira os trechos extraídos. Páginas sem camada de texto passam por OCR.
-3. Escolha o idioma de destino, inicialmente português.
-4. Clique em **Traduzir**. O macOS pode solicitar o download de idiomas.
-5. Use **Parar** para pausar após o trecho atual e **Continuar** para retomar.
-6. **Exportar** salva um TXT UTF-8 com original, tradução e referência à página. Trechos pendentes são identificados.
+- Abra um PDF com ⌘O ou arraste-o para a janela.
+- Escolha o destino na barra lateral; a origem é automática.
+- Inicie a tradução e acompanhe o progresso. Pause após o trecho atual e continue mantendo o que já foi traduzido.
+- Navegue por página, compare os dois idiomas ou ative **Só tradução**.
+- Ajuste o tamanho de texto de 14 a 24 pontos e copie traduções individualmente.
+- Exporte em TXT bilíngue com ⌘⇧E. Trechos pendentes ficam identificados.
+- A importação mostra a página atual e permite cancelar. Se houver outro documento aberto, ele permanece disponível quando a nova importação falha ou é cancelada.
+- Tema acompanha o macOS, com cores adaptadas a claro/escuro e logo integrada à tela inicial.
 
-O progresso permanece na janela durante a sessão; fechar a janela descarta os dados. Trocar o destino limpa as traduções anteriores. Não há conta, chave de API, servidor próprio ou dependências externas.
+O progresso fica na janela durante a sessão. Fechá-la descarta os dados. Alterar o idioma de destino apaga as traduções anteriores. A tradução pode solicitar downloads de idiomas do sistema; eles são gerenciados pelo macOS e podem continuar em segundo plano.
 
-## Limites desta primeira versão
+## Desempenho e validação
 
-- O motor é o framework Translation da Apple; a lista de destinos vem do sistema. Nem todos os idiomas do mundo são suportados. A origem é detectada pelo motor e a sessão trabalha com um par de idiomas; documentos que misturam idiomas precisam ser separados por idioma para resultados previsíveis.
-- A tradução não resume deliberadamente o texto, mas tradução automática não garante fidelidade absoluta. Revise termos técnicos, números, referências e textos importantes comparando com o original.
-- PDFs frequentemente não armazenam parágrafos semanticamente. A separação usa distância vertical, recuo e ordem das linhas do PDFKit/Vision. Colunas, tabelas, cabeçalhos, notas, hifenização, parágrafos que atravessam páginas e escrita vertical podem ser extraídos incorretamente.
-- OCR depende da qualidade da imagem e dos idiomas reconhecidos pelo Vision. Páginas que já possuem texto não passam por OCR adicional; imagens com texto embutidas nessas páginas podem não ser capturadas.
-- PDF protegido precisa ser desbloqueado antes da importação. A exportação é textual, sem recriar a diagramação original.
-- A extração ocorre fora da interface; documentos muito grandes podem consumir memória e levar tempo. A importação ainda não possui cancelamento.
-
-## Estrutura
-
-- `App.swift`: interface, sessão de tradução, importação e exportação.
-- `Extraction.swift`: PDFKit, OCR Vision e agrupamento de linhas.
-- `ParagraphTests.swift`: testes da separação e preservação do texto.
+Veja [PERF.md](PERF.md) para o benchmark antes/depois, seus limites e os achados da revisão.
 
 ```sh
-swift test
+./check.sh       # testes executáveis, incluindo PDF real, OCR e cancelamento
+./benchmark.sh   # custo de atualização dos metadados da interface
+swift test       # testes XCTest; requer Xcode com XCTest disponível
 ```
 
-## Referências
+Não há dependências de terceiros, servidor, login ou chave de API. O ambiente desta entrega possui Command Line Tools sem XCTest; `check.sh` é a verificação executável usada aqui. As 15 verificações passaram, incluindo OCR real de um PDF com imagem. Também foram conferidos manualmente importação, modo só tradução, tamanho de texto, contraste no modo escuro, tradução inglês → português e exportação.
 
-- [TranslationSession — Apple](https://developer.apple.com/documentation/translation/translationsession)
-- [Translation — Apple](https://developer.apple.com/documentation/translation)
+## Limites
 
-O conteúdo é processado no dispositivo pelo framework nativo. Downloads de idiomas podem exigir internet; consulte a documentação da Apple sobre métricas do sistema.
+- Idiomas disponíveis dependem do framework Translation da Apple. Não há suporte universal. Uma sessão trabalha com um par de idiomas; PDFs com múltiplos idiomas precisam ser separados para resultados previsíveis.
+- Tradução automática não garante fidelidade absoluta. Compare termos, números e referências com o original.
+- A extração separa parágrafos por distância, recuo e ordem das linhas. Colunas, tabelas, escrita vertical, hifenização e parágrafos entre páginas podem exigir revisão. Não há reconstrução da diagramação original na exportação.
+- OCR é usado nas páginas sem texto extraível. Texto dentro de imagens em páginas que também têm texto pode não ser capturado. O reconhecimento depende da qualidade da digitalização e dos idiomas do Vision.
+- PDFs protegidos precisam ser desbloqueados antes da importação. Arquivos grandes ainda podem consumir memória. Cancelar aguarda a operação atual da página; pausar tradução aguarda o trecho atual ou o diálogo do sistema.
+- O fluxo completo foi validado com um PDF de dois parágrafos em inglês: download dos modelos, tradução para português, comparação e exportação em TXT. Isso não garante resultados em todos os idiomas e layouts. Não foi comprovado ganho de velocidade no motor de tradução.
 
-## Validação desta entrega
+## Código
 
-- Build de produção concluído e `.app` com assinatura local gerado em Apple Silicon.
-- Abertura da janela verificada no macOS.
-- Sete verificações passaram em `./check.sh`, incluindo extração de um PDF real com dois parágrafos, preservação de números, Unicode e listas.
-- `swift test` requer XCTest do Xcode completo, ausente no ambiente desta entrega. `./check.sh` funciona com Command Line Tools.
-- A tradução completa com download dos modelos e a qualidade do OCR ainda precisam de validação manual com documentos representativos. Não são cobertas pelas sete verificações acima.
+- `App.swift`: composição da janela, controles e navegação.
+- `ReaderViews.swift`: tela inicial e cartões de leitura.
+- `ReaderModel.swift`: importação, tradução e exportação.
+- `DocumentState.swift`: parágrafos, intervalos de páginas e progresso.
+- `Extraction.swift`: PDFKit, OCR Vision e agrupamento de linhas.
+
+Referências: [Translation — Apple](https://developer.apple.com/documentation/translation) e [TranslationSession — Apple](https://developer.apple.com/documentation/translation/translationsession).

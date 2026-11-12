@@ -60,7 +60,7 @@ struct Extracted: Sendable {
 }
 
 enum PDFExtractor {
-    static func extract(url: URL) throws -> Extracted {
+    static func extract(url: URL, progress: @Sendable (Int, Int) -> Void = { _, _ in }) throws -> Extracted {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         guard let pdf = PDFDocument(url: url) else { throw ImportFailure.invalid }
@@ -70,6 +70,7 @@ enum PDFExtractor {
         var emptyPages: [Int] = []
         for index in 0..<pdf.pageCount {
             try Task.checkCancellation()
+            progress(index + 1, pdf.pageCount)
             guard let page = pdf.page(at: index) else { emptyPages.append(index + 1); continue }
             var lines = (page.selection(for: page.bounds(for: .mediaBox))?.selectionsByLine() ?? []).compactMap { selection -> TextLine? in
                 guard let text = selection.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -95,6 +96,7 @@ enum PDFExtractor {
                     }
                 }
             }
+            try Task.checkCancellation()
             let blocks = Paragraphs.group(lines)
             if blocks.isEmpty { emptyPages.append(index + 1) }
             paragraphs += blocks.map { Paragraph(page: index + 1, original: $0) }

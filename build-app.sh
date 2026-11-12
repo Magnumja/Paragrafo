@@ -3,7 +3,8 @@ set -eu
 cd "$(dirname "$0")"
 swift build -c release
 APP="dist/Parágrafo.app"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp Brand/paragrafo-logo.png "$APP/Contents/Resources/"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 cp "$BIN_DIR/Paragrafo" "$APP/Contents/MacOS/Paragrafo"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -14,8 +15,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>app.paragrafo.mac</string>
 <key>CFBundleName</key><string>Parágrafo</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>0.2.0</string>
+<key>CFBundleVersion</key><string>2</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
