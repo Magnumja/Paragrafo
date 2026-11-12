@@ -28,13 +28,12 @@ struct ContentView: View {
             } else {
                 HStack(spacing: 0) {
                     sidebar
-                    Divider()
                     readingPane
                 }
             }
             statusBar
         }
-        .background(ReaderStyle.canvas)
+        .background { ReaderBackdrop() }
         .tint(ReaderStyle.accent)
         .navigationTitle("Parágrafo")
         .toolbar {
@@ -113,7 +112,7 @@ struct ContentView: View {
                 } else {
                     Button(model.document.completed == model.document.count ? "Concluído" : model.document.completed > 0 ? "Continuar tradução" : "Traduzir documento", systemImage: model.document.completed == model.document.count ? "checkmark" : "character.bubble") {
                         model.startTranslation()
-                    }.buttonStyle(.borderedProminent).controlSize(.large)
+                    }.readerPrimaryAction().controlSize(.large)
                         .disabled(model.document.completed == model.document.count)
                 }
             }
@@ -138,7 +137,8 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(22).frame(width: 250).frame(maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .readerGlass(radius: 22)
+        .padding(.leading, 12).padding(.vertical, 12)
     }
 
     private var readingPane: some View {
@@ -178,12 +178,11 @@ struct ContentView: View {
             }.labelsHidden().frame(width: 115)
             Button { movePage(1) } label: { Image(systemName: "chevron.right") }
                 .accessibilityLabel("Próxima página").disabled(model.selectedPage == model.document.pages.last)
-        }.controlSize(.small)
+        }.controlSize(.small).padding(10).readerGlass(radius: 16)
     }
 
     private var statusBar: some View {
         VStack(spacing: 0) {
-            Divider()
             HStack(spacing: 10) {
                 if model.busy { ProgressView().controlSize(.small) }
                 else { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(ReaderStyle.accent) }
@@ -194,7 +193,7 @@ struct ContentView: View {
                     Button("Cancelar") { model.stop() }.disabled(model.stopping).controlSize(.small)
                 }
             }.padding(.horizontal, 22).padding(.vertical, 12)
-        }.background(Color(nsColor: .windowBackgroundColor))
+        }.readerGlass(radius: 14).padding(.horizontal, 12).padding(.bottom, 10)
     }
 
     private var progress: Double { Double(model.document.completed) / Double(max(1, model.document.count)) }

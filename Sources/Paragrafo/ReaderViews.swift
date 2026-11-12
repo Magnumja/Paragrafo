@@ -7,7 +7,6 @@ enum ReaderStyle {
             ? NSColor(srgbRed: 0.55, green: 0.76, blue: 0.65, alpha: 1)
             : NSColor(srgbRed: 0.22, green: 0.40, blue: 0.33, alpha: 1)
     })
-    static let canvas = Color(nsColor: .underPageBackgroundColor)
 }
 
 struct EmptyReader: View {
@@ -32,7 +31,7 @@ struct EmptyReader: View {
             Button(action: open) {
                 Label(importing ? "Lendo documento…" : "Escolher PDF", systemImage: "plus")
                     .padding(.horizontal, 16).padding(.vertical, 6)
-            }.buttonStyle(.borderedProminent).controlSize(.large).disabled(importing).padding(.top, 28)
+            }.readerPrimaryAction().controlSize(.large).disabled(importing).padding(.top, 28)
             Text("ou arraste um PDF para esta janela")
                 .font(.caption).foregroundStyle(.secondary).padding(.top, 12)
             Spacer()

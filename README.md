@@ -61,3 +61,11 @@ Referências: [Translation — Apple](https://developer.apple.com/documentation/
 ### Correção da tradução
 
 Reproduzidas e corrigidas duas falhas: início com trecho apenas numérico e nova tentativa com o mesmo par de idiomas após limpar a configuração. A configuração agora é mantida e invalidada explicitamente ao reiniciar. Inglês → português foi validado na interface em duas execuções sucessivas, usando detecção automática e seleção manual. O teste de regressão de reinício falhou antes da correção e passou depois. O PDF específico do usuário não foi disponibilizado para validação.
+
+### Visual de vidro
+
+A barra lateral, navegação por página e barra de status usam Liquid Glass nativo quando compilados com SDK compatível e executados no macOS 26+. No macOS 15, usam material fosco nativo. A área de texto permanece sólida para leitura. O fundo usa vibrancy do AppKit e acompanha a ativação da janela. Reduzir transparência e aumentar contraste substituem os painéis translúcidos por superfícies sólidas. Botões principais usam o estilo de vidro nas versões compatíveis.
+
+Validação: build de produção, inspeção visual da tela inicial/leitor no macOS atual e tradução inglês → português em uma instância de prévia separada. O documento aberto pelo usuário foi preservado. Os caminhos de macOS 15 e acessibilidade foram conferidos no código, não em um sistema macOS 15 separado.
+
+Referência: [Liquid Glass para views SwiftUI — Apple](https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views).

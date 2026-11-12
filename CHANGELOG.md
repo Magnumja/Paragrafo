@@ -1,5 +1,11 @@
 # Histórico
 
+## Visual de vidro — 2026-11-12
+
+- Liquid Glass nativo na barra lateral, navegação e status em macOS compatível.
+- Materiais foscos no macOS 15, com respeito às preferências de transparência e contraste.
+- Texto sobre superfície sólida e botões principais com estilo de vidro.
+
 ## Correção de tradução — 2026-11-12
 
 - Corrigido reinício da sessão com o mesmo par de idiomas.
