@@ -1,6 +1,6 @@
 # Logo Parágrafo
 
-Arquivo: `paragrafo-logo.png`. Gerado com a ferramenta nativa de imagens, com fundo transparente. Símbolo inspirado em duas páginas, parágrafos paralelos e a letra P, com tipografia serifada e verde discreto. Asset de marca; ainda não aplicado ao ícone do aplicativo.
+Arquivo: `paragrafo-logo.png`. Gerado com a ferramenta nativa de imagens, com fundo transparente. Símbolo inspirado em duas páginas, parágrafos paralelos e a letra P, com tipografia serifada e verde discreto. Aplicado também ao ícone do aplicativo em `Paragrafo.icns`, com resoluções de 16 a 1024 pixels, incluindo Retina. O script de build inclui o ícone no bundle e o registra no Info.plist.
 
 ## Prompt utilizado
 
