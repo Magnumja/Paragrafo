@@ -69,6 +69,7 @@ struct ContentView: View {
         .task { await model.loadLanguages() }
         .translationTask(model.configuration) { session in await model.translate(using: session) }
         .onChange(of: model.target) { _, _ in model.changeTarget() }
+        .onChange(of: model.source) { _, _ in model.changeTarget() }
         .onDisappear { if model.busy { model.stop() } }
     }
 
@@ -83,6 +84,13 @@ struct ContentView: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("IDIOMA DE ORIGEM")
+                Picker("Idioma de origem", selection: $model.source) {
+                    Text(model.detectedSource.map { "Automático · " + languageName($0) } ?? "Detectar automaticamente").tag("auto")
+                    ForEach(model.languages, id: \.minimalIdentifier) { language in
+                        Text(languageName(language.minimalIdentifier)).tag(language.minimalIdentifier)
+                    }
+                }.labelsHidden().disabled(model.busy).frame(maxWidth: .infinity)
                 sectionTitle("IDIOMA DE DESTINO")
                 Picker("Idioma de destino", selection: $model.target) {
                     if model.languages.isEmpty { Text("Português").tag("pt") }
@@ -90,7 +98,6 @@ struct ContentView: View {
                         Text(languageName(language.minimalIdentifier)).tag(language.minimalIdentifier)
                     }
                 }.labelsHidden().disabled(model.busy).frame(maxWidth: .infinity)
-                Label("Origem automática", systemImage: "wand.and.stars").font(.caption).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 10) {
                 HStack {

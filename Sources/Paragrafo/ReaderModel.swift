@@ -8,6 +8,8 @@ final class ReaderModel: ObservableObject {
     @Published var document = DocumentState()
     @Published var filename = ""
     @Published var target = "pt"
+    @Published var source = "auto"
+    @Published var detectedSource: String?
     @Published var languages: [Locale.Language] = []
     @Published var selectedPage = 1
     @Published var phase: Phase = .idle
@@ -19,6 +21,7 @@ final class ReaderModel: ObservableObject {
     @Published var importProgress = 0.0
     private var importTask: Task<Extracted, Error>?
     private var importID = UUID()
+    private var sessionRunning = false
     var busy: Bool { phase != .idle }
 
     func load(_ url: URL) {
@@ -28,7 +31,6 @@ final class ReaderModel: ObservableObject {
         phase = .importing
         stopping = false
         importProgress = 0
-        configuration = nil
         status = "Abrindo \(url.lastPathComponent)…"
         let worker = Task.detached(priority: .userInitiated) { [weak self] in
             try PDFExtractor.extract(url: url) { [weak self] page, total in
@@ -47,6 +49,7 @@ final class ReaderModel: ObservableObject {
                 try Task.checkCancellation()
                 guard importID == id, !stopping else { return }
                 document = DocumentState(result.paragraphs)
+                detectedSource = TranslationInput.detectLanguage(in: result.paragraphs)
                 selectedPage = document.pages.first ?? 1
                 filename = url.lastPathComponent
                 status = "\(document.count) parágrafos prontos para traduzir."
@@ -68,6 +71,10 @@ final class ReaderModel: ObservableObject {
         if phase == .importing {
             importTask?.cancel()
             status = "Cancelando após a página atual…"
+        } else if !sessionRunning {
+            phase = .idle
+            stopping = false
+            status = "Tradução pausada. Você pode tentar novamente."
         } else {
             status = "Pausando após o parágrafo atual…"
         }
@@ -75,25 +82,47 @@ final class ReaderModel: ObservableObject {
 
     func changeTarget() {
         guard !busy else { return }
-        configuration = nil
         document.clearTranslations()
-        status = "Destino alterado. Pronto para traduzir."
+        status = "Idiomas alterados. Pronto para traduzir."
     }
 
     func startTranslation() {
         guard !busy, !document.isEmpty, document.completed < document.count else { return }
+        let origin = source == "auto" ? detectedSource : source
+        if let origin, TranslationInput.sameLanguage(origin, target) {
+            error = "A origem e o destino são o mesmo idioma. Se o documento está em inglês, escolha Inglês em Idioma de origem e Português no destino."
+            status = "Escolha idiomas diferentes para traduzir."
+            return
+        }
+        if origin == nil && document.paragraphs.contains(where: { TranslationInput.needsTranslation($0.original) }) {
+            error = "Não foi possível identificar a língua do documento. Escolha o Idioma de origem na barra lateral."
+            return
+        }
+        // Preserve numbers/punctuation without asking the language detector to classify them.
+        for index in document.paragraphs.indices where !TranslationInput.needsTranslation(document.paragraphs[index].original) {
+            document.apply(document.paragraphs[index].original, at: index)
+        }
+        guard document.completed < document.count else {
+            status = "Documento sem texto para traduzir. Números e símbolos foram preservados."
+            return
+        }
+        guard let origin else { return }
         phase = .translating
         stopping = false
-        status = "Preparando tradução…"
-        let next = TranslationSession.Configuration(source: nil, target: Locale.Language(identifier: target))
-        if configuration == next { configuration?.invalidate() } else { configuration = next }
+        error = nil
+        status = "Preparando \(languageName(origin)) → \(languageName(target))…"
+        let next = TranslationSession.Configuration(source: Locale.Language(identifier: origin), target: Locale.Language(identifier: target))
+        if configuration?.source == next.source && configuration?.target == next.target {
+            configuration?.invalidate()
+        } else { configuration = next }
     }
 
     func translate(using session: TranslationSession) async {
         guard phase == .translating else { return }
-        defer { phase = .idle; stopping = false }
+        sessionRunning = true
+        defer { phase = .idle; stopping = false; sessionRunning = false }
         do {
-            // translate detects the source and requests language downloads as needed.
+            // Source is inferred from document text or explicitly chosen, not from its first heading.
             // Keeping calls sequential preserves paragraph order and pause boundaries.
             for index in document.paragraphs.indices {
                 try Task.checkCancellation()
@@ -109,8 +138,18 @@ final class ReaderModel: ObservableObject {
             status = "Tradução interrompida. Seu progresso foi mantido."
         } catch let error as CocoaError where error.code == .userCancelled {
             status = "Tradução pausada. Continue quando os idiomas estiverem disponíveis."
+        } catch TranslationError.unableToIdentifyLanguage {
+            error = "Não foi possível identificar o idioma. Selecione Inglês em Idioma de origem e tente novamente."
+            status = "Escolha o idioma de origem."
+        } catch TranslationError.unsupportedSourceLanguage {
+            error = "O idioma de origem não é suportado pelo tradutor do macOS. Confira o idioma selecionado."
+            status = "Idioma de origem indisponível."
+        } catch TranslationError.unsupportedLanguagePairing {
+            error = "O macOS não oferece tradução entre esses idiomas. Selecione a origem correta e um destino diferente."
+            status = "Combinação de idiomas indisponível."
         } catch {
-            self.error = "O progresso foi mantido. Verifique se o idioma é compatível e se os modelos foram baixados.\n\n\(error.localizedDescription)"
+            let details = error as NSError
+            self.error = "Não foi possível traduzir. O progresso foi mantido. Confira o idioma de origem e tente novamente.\n\n\(error.localizedDescription)\nCódigo: \(details.domain) / \(details.code)"
             status = "Não foi possível concluir a tradução."
         }
     }

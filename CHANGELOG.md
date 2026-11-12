@@ -1,5 +1,13 @@
 # Histórico
 
+## Correção de tradução — 2026-11-12
+
+- Corrigido reinício da sessão com o mesmo par de idiomas.
+- Origem detectada a partir de uma amostra do documento e selecionável manualmente.
+- Números e símbolos preservados sem depender de detecção de língua.
+- Pausar durante a preparação libera os controles.
+- Mensagens específicas para origem não identificada e idiomas incompatíveis.
+
 ## 0.2.0 — 2026-11-12
 
 - Nova interface com logo, barra lateral, navegação por página e cores para tema claro/escuro.
