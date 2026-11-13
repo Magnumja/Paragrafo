@@ -30,7 +30,31 @@ enum ReadingMode: String, CaseIterable, Identifiable {
 
 struct EmptyReader: View {
     @ObservedObject var model: ReaderModel
+    var dropTarget = false
     let open: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The drop target is visible before anything is dragged, and answers when a PDF hovers over the window.
+    private var dropZone: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return VStack(spacing: 12) {
+            Image(systemName: dropTarget ? "arrow.down.doc.fill" : "doc.badge.plus")
+                .font(.system(size: 26, weight: .light)).foregroundStyle(ReaderStyle.accent)
+                .contentTransition(.symbolEffect(.replace))
+            Button(action: open) {
+                Label("Escolher PDF", systemImage: "plus").padding(.horizontal, 16).padding(.vertical, 6)
+            }.readerPrimaryAction().controlSize(.large)
+            Text(dropTarget ? "Solte para abrir" : "ou arraste um PDF para cá")
+                .font(.caption).foregroundStyle(dropTarget ? ReaderStyle.accent : .secondary)
+        }
+        .padding(.vertical, 24).frame(maxWidth: 460)
+        .readerGlass(in: shape)
+        .overlay(shape.strokeBorder(dropTarget ? ReaderStyle.accent : Color.primary.opacity(0.16),
+                                    style: StrokeStyle(lineWidth: dropTarget ? 2 : 1.2, dash: [7, 5])))
+        .scaleEffect(dropTarget && !reduceMotion ? 1.02 : 1)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: dropTarget)
+    }
+
     private static let logo = Bundle.main.url(forResource: "paragrafo-logo", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
 
     var body: some View {
@@ -55,10 +79,7 @@ struct EmptyReader: View {
                         Button("Cancelar") { model.stop() }.disabled(model.stopping)
                     }.padding(.top, 30)
                 } else {
-                    Button(action: open) {
-                        Label("Escolher PDF", systemImage: "plus").padding(.horizontal, 16).padding(.vertical, 6)
-                    }.readerPrimaryAction().controlSize(.large).padding(.top, 26)
-                    Text("ou arraste um PDF para esta janela").font(.caption).foregroundStyle(.secondary).padding(.top, 10)
+                    dropZone.padding(.top, 28)
                 }
                 if !model.recents.isEmpty && model.phase != .importing {
                     VStack(alignment: .leading, spacing: 6) {
@@ -69,8 +90,8 @@ struct EmptyReader: View {
                                 if recent != model.recents.prefix(5).last { Divider().padding(.leading, 46) }
                             }
                         }
-                        .background(ReaderStyle.paper.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .readerGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }.frame(maxWidth: 460).padding(.top, 36)
                 }
                 HStack(spacing: 26) {
@@ -97,7 +118,7 @@ private struct RecentRow: View {
             HStack(spacing: 12) {
                 Image(systemName: "doc.text").font(.title3).foregroundStyle(ReaderStyle.accent).frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(recent.name).font(.callout.weight(.medium)).lineLimit(1)
+                    Text(recent.name).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.middle).help(recent.name)
                     Text(detail).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -194,7 +215,9 @@ struct BilingualPage: View {
             Spacer()
             Button { model.movePage(1) } label: { Label("Próxima página", systemImage: "chevron.right").labelStyle(TrailingIcon()) }
                 .disabled(model.selectedPage == model.document.pages.last)
-        }.padding(.top, 28).padding(.horizontal, 12)
+        }
+        .buttonStyle(GlassCapsuleButtonStyle())
+        .padding(.top, 28).padding(.horizontal, 12)
     }
 }
 
@@ -235,7 +258,13 @@ struct ParagraphRow: View {
         .padding(.vertical, 16).padding(.horizontal, 12)
         .background(highlighted ? ReaderStyle.accent.opacity(0.14) : hovering ? Color.primary.opacity(0.035) : .clear,
                     in: RoundedRectangle(cornerRadius: 10))
-        .overlay(alignment: .topTrailing) { actions.padding(6).opacity(hovering ? 1 : 0).allowsHitTesting(hovering).accessibilityHidden(true) }
+        // Floats on the row's top edge (over the divider), so it never covers the first line of text.
+        .overlay(alignment: .topTrailing) {
+            actions.offset(x: -8, y: -13)
+                .opacity(hovering ? 1 : 0).scaleEffect(hovering || reduceMotion ? 1 : 0.94, anchor: .topTrailing)
+                .allowsHitTesting(hovering).accessibilityHidden(true)
+        }
+        .zIndex(hovering ? 1 : 0)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: highlighted)
         .onHover { hovering = $0 }
@@ -245,6 +274,13 @@ struct ParagraphRow: View {
             Divider()
             Button("Perguntar sobre este trecho", systemImage: "sparkles", action: ask)
             Button("Mostrar no PDF original", systemImage: "doc.viewfinder", action: showInPDF)
+        }
+        // The hover bar is hidden from VoiceOver; offer the same actions on the paragraph itself.
+        .accessibilityActions {
+            if !pending { Button("Copiar tradução") { copy(paragraph.translated) } }
+            Button("Copiar original") { copy(paragraph.original) }
+            Button("Perguntar sobre este trecho", action: ask)
+            Button("Mostrar no PDF original", action: showInPDF)
         }
     }
 
@@ -284,8 +320,8 @@ struct ParagraphRow: View {
             action("doc.viewfinder", "Mostrar no PDF original", showInPDF)
         }
         .padding(.horizontal, 6).padding(.vertical, 3)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .readerGlass(in: Capsule())
+        .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     }
 
     private func action(_ symbol: String, _ title: String, _ run: @escaping () -> Void) -> some View {

@@ -25,16 +25,15 @@ struct AssistantPanel: View {
                 statusLine
             }
             Spacer()
-            Menu {
+            GlassMenu(title: assistant.chatModel.isEmpty ? "Modelo" : assistant.chatModel, symbol: "cpu", compact: true) {
                 Picker("Modelo", selection: $assistant.chatModel) {
                     ForEach(assistant.chatModels, id: \.self) { Text($0).tag($0) }
-                }
+                }.pickerStyle(.inline)
                 Divider()
                 Button("Nova conversa", systemImage: "square.and.pencil") { assistant.clear() }
                     .disabled(assistant.messages.isEmpty || assistant.busy)
-            } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .accessibilityLabel("Opções do assistente")
+            }
+            .help("Modelo e opções do assistente")
         }.padding(.horizontal, 16).padding(.vertical, 12)
     }
 
@@ -48,7 +47,7 @@ struct AssistantPanel: View {
                 Text("Indexando \(done) de \(total) trechos").font(.caption).foregroundStyle(.secondary)
             }
         case (.ready, .ready):
-            Label(assistant.chatModel + " · local", systemImage: "circle.fill")
+            Label("Pronto · roda neste Mac", systemImage: "circle.fill")
                 .labelStyle(StatusDot(color: ReaderStyle.accent)).font(.caption).foregroundStyle(.secondary)
         case (.ready, .failed):
             Label("Índice indisponível", systemImage: "circle.fill").labelStyle(StatusDot(color: .orange)).font(.caption).foregroundStyle(.secondary)
@@ -106,9 +105,8 @@ struct AssistantPanel: View {
                 Text(title).font(.callout).multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12).padding(.vertical, 10).contentShape(Rectangle())
-            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
-        }.buttonStyle(.plain).disabled(assistant.busy)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+        }.buttonStyle(GlassCardButtonStyle()).disabled(assistant.busy)
     }
 
     private var conversation: some View {
@@ -143,8 +141,10 @@ struct AssistantPanel: View {
                 }
             }
             .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
-            .background(ReaderStyle.paper, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(focused ? ReaderStyle.accent.opacity(0.6) : Color.primary.opacity(0.12)))
+            .readerGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(ReaderStyle.accent.opacity(focused ? 0.7 : 0), lineWidth: 1.5))
+            .animation(.easeOut(duration: 0.15), value: focused)
             Text("Gerado no seu Mac. Confira nos trechos citados.").font(.caption2).foregroundStyle(.tertiary)
         }.padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 10)
     }
@@ -268,7 +268,6 @@ private struct SourceRow: View {
     let number: Int
     let source: Retrieved
     let open: () -> Void
-    @ViewState private var hovering = false
 
     var body: some View {
         Button(action: open) {
@@ -282,10 +281,9 @@ private struct SourceRow: View {
                 Spacer(minLength: 0)
                 Image(systemName: "arrow.up.forward").font(.caption2).foregroundStyle(.tertiary)
             }
-            .padding(9).contentShape(Rectangle())
-            .background(Color.primary.opacity(hovering ? 0.08 : 0.045), in: RoundedRectangle(cornerRadius: 9))
+            .padding(9)
         }
-        .buttonStyle(.plain).onHover { hovering = $0 }
+        .buttonStyle(GlassCardButtonStyle(cornerRadius: 9))
         .help("Ir para este trecho na página \(source.chunk.page)")
         .accessibilityLabel("Fonte \(number), página \(source.chunk.page). Ir para o trecho.")
     }

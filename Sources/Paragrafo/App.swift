@@ -29,6 +29,27 @@ struct ParagrafoApp: App {
         // One window: a PDF opened from Finder goes to it instead of spawning an empty second one.
         Window("Parágrafo", id: "leitor") { ContentView().frame(minWidth: 880, minHeight: 600) }
             .defaultSize(width: 1400, height: 880)
+            .commands { SidebarCommands(); TextSizeCommands() }
+    }
+}
+
+/// View ▸ Tamanho do texto. ⌘= is what Mac users press to enlarge (the menu shows it as ⌘+).
+struct TextSizeCommands: Commands {
+    @AppStorage("fontSize") private var fontSize = 17.0
+    @AppStorage("readingMode") private var mode = ReadingMode.parallel
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            Divider()
+            Menu("Tamanho do texto") {
+                Button("Aumentar") { fontSize = min(24, fontSize + 1) }
+                    .keyboardShortcut("=").disabled(fontSize >= 24 || mode == .original)
+                Button("Diminuir") { fontSize = max(14, fontSize - 1) }
+                    .keyboardShortcut("-").disabled(fontSize <= 14 || mode == .original)
+                Button("Tamanho padrão") { fontSize = 17 }
+                    .keyboardShortcut("0").disabled(fontSize == 17 || mode == .original)
+            }
+        }
     }
 }
 
@@ -45,7 +66,8 @@ struct ContentView: View {
     var body: some View {
         Group {
             if model.document.isEmpty {
-                EmptyReader(model: model, open: { importing = true }).background { ReaderBackdrop() }
+                EmptyReader(model: model, dropTarget: dropTarget && !model.busy, open: { importing = true })
+                    .background { ReaderBackdrop() }
             } else {
                 workspace
             }
@@ -64,7 +86,8 @@ struct ContentView: View {
             return true
         } isTargeted: { dropTarget = $0 }
         .overlay {
-            if dropTarget && !model.busy {
+            // The start screen has its own drop zone; the window-wide outline is for an open document.
+            if dropTarget && !model.busy && !model.document.isEmpty {
                 RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderStyle.accent, style: StrokeStyle(lineWidth: 3, dash: [8]))
                     .background(ReaderStyle.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                     .padding(10).allowsHitTesting(false)
@@ -111,10 +134,11 @@ struct ContentView: View {
                         .keyboardShortcut("]").disabled(model.selectedPage == model.document.pages.last)
                 }
                 ControlGroup {
+                    // Shortcuts live in the View menu (TextSizeCommands) so they are discoverable there.
                     Button("Diminuir texto", systemImage: "textformat.size.smaller") { fontSize = max(14, fontSize - 1) }
-                        .keyboardShortcut("-").disabled(fontSize <= 14 || mode == .original)
+                        .disabled(fontSize <= 14 || mode == .original).help("Diminuir texto (⌘−)")
                     Button("Aumentar texto", systemImage: "textformat.size.larger") { fontSize = min(24, fontSize + 1) }
-                        .keyboardShortcut("+").disabled(fontSize >= 24 || mode == .original)
+                        .disabled(fontSize >= 24 || mode == .original).help("Aumentar texto (⌘+)")
                 }
                 Menu("Exportar", systemImage: "square.and.arrow.up") {
                     ForEach(ExportFormat.allCases) { format in
