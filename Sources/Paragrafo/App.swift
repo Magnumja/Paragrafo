@@ -59,6 +59,7 @@ struct ContentView: View {
     @EnvironmentObject private var requests: OpenRequests
     @ViewState private var importing = false
     @ViewState private var dropTarget = false
+    @ViewState private var navigation = PageNavigation()
     @AppStorage("readingMode") private var mode = ReadingMode.parallel
     @AppStorage("fontSize") private var fontSize = 17.0
     @AppStorage("showAssistant") private var showAssistant = true
@@ -111,11 +112,15 @@ struct ContentView: View {
             Sidebar(model: model).navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 360)
         } detail: {
             reading
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { navigation.readingFrame = $0 }
                 .inspector(isPresented: $showAssistant) {
                     AssistantPanel(assistant: assistant, translations: { model.document.paragraphs.map(\.translated) }, open: follow)
                         .inspectorColumnWidth(min: 300, ideal: 380, max: 540)
                 }
         }
+        .onAppear { navigation.install(model: model) }
+        .onDisappear { navigation.uninstall() }
+        .onChange(of: mode, initial: true) { _, mode in navigation.enabled = mode != .original }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button("Início", systemImage: "house") { model.close() }
@@ -130,8 +135,10 @@ struct ContentView: View {
                 ControlGroup {
                     Button("Página anterior", systemImage: "chevron.left") { model.movePage(-1) }
                         .keyboardShortcut("[").disabled(model.selectedPage == model.document.pages.first)
+                        .help("Página anterior (← ou ⌘[)")
                     Button("Próxima página", systemImage: "chevron.right") { model.movePage(1) }
                         .keyboardShortcut("]").disabled(model.selectedPage == model.document.pages.last)
+                        .help("Próxima página (→ ou ⌘])")
                 }
                 ControlGroup {
                     // Shortcuts live in the View menu (TextSizeCommands) so they are discoverable there.

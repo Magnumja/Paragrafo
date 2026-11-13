@@ -1,4 +1,5 @@
 import SwiftUI
+import PDFKit
 
 @MainActor
 enum ReaderStyle {
@@ -145,8 +146,17 @@ struct BilingualPage: View {
     let translationOnly: Bool
     let fontSize: Double
     let ask: (Int) -> Void
-    let showInPDF: (Int) -> Void
+    /// Switches the whole reader to the original PDF at this paragraph (offered from the peek).
+    let openInPDF: (Int) -> Void
     @ViewState private var width: CGFloat = 900
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The new page slides in from the side it comes from; the old one only fades, so its direction never matters.
+    private var pageTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(insertion: .offset(x: model.pageForward ? 80 : -80).combined(with: .opacity),
+                           removal: .opacity)
+    }
 
     private var range: Range<Int> { model.document.pageRanges[model.selectedPage] ?? 0..<0 }
     private var stacked: Bool { width < 720 }
@@ -160,7 +170,7 @@ struct BilingualPage: View {
                         ParagraphRow(paragraph: model.document.paragraphs[index], number: index + 1,
                                      translationOnly: translationOnly, stacked: stacked, fontSize: fontSize,
                                      active: model.active == index, highlighted: model.highlighted?.contains(index) ?? false,
-                                     ask: { ask(index) }, showInPDF: { showInPDF(index) })
+                                     pdf: model.pdf, ask: { ask(index) }, openInPDF: { openInPDF(index) })
                             .id(index)
                         if index != range.upperBound - 1 { Divider().padding(.leading, 46) }
                     }
@@ -170,6 +180,7 @@ struct BilingualPage: View {
                 .frame(maxWidth: translationOnly ? 760 : 1180).frame(maxWidth: .infinity)
             }
             .id(model.selectedPage)
+            .transition(pageTransition)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .onChange(of: model.revealToken, initial: true) { _, _ in
                 guard let index = model.highlighted?.lowerBound, range.contains(index) else { return }
@@ -179,6 +190,8 @@ struct BilingualPage: View {
                 }
             }
         }
+        .clipped()
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.3), value: model.selectedPage)
         .background(ReaderStyle.paper)
     }
 
@@ -212,9 +225,14 @@ struct BilingualPage: View {
         HStack {
             Button("Página anterior", systemImage: "chevron.left") { model.movePage(-1) }
                 .disabled(model.selectedPage == model.document.pages.first)
+                .help("Também com ← ou deslizando dois dedos para a direita")
+            Spacer()
+            Text("← → mudam de página").font(.caption2).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             Spacer()
             Button { model.movePage(1) } label: { Label("Próxima página", systemImage: "chevron.right").labelStyle(TrailingIcon()) }
                 .disabled(model.selectedPage == model.document.pages.last)
+                .help("Também com → ou deslizando dois dedos para a esquerda")
         }
         .buttonStyle(GlassCapsuleButtonStyle())
         .padding(.top, 28).padding(.horizontal, 12)
@@ -227,6 +245,38 @@ private struct TrailingIcon: LabelStyle {
     }
 }
 
+/// The original page, with the paragraph marked, shown over the reading view. Esc or "Fechar" returns to reading.
+private struct PDFPeek: View {
+    let pdf: PDFDocument
+    let paragraph: Paragraph
+    let number: Int
+    let close: () -> Void
+    let openFull: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Página \(paragraph.page) · PDF original").font(.headline)
+                    Text(paragraph.bounds == nil ? "Trecho sem posição no PDF" : "Parágrafo \(number) marcado")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Abrir no modo PDF", systemImage: "arrow.up.left.and.arrow.down.right", action: openFull)
+                    .buttonStyle(GlassCapsuleButtonStyle())
+                    .help("Trocar a leitura para o PDF original neste trecho")
+                Button("Fechar", systemImage: "xmark", action: close)
+                    .labelStyle(.iconOnly).buttonStyle(GlassCapsuleButtonStyle())
+                    .keyboardShortcut(.cancelAction).help("Fechar (Esc)")
+            }
+            .padding(12)
+            Divider()
+            PDFPane(document: pdf, page: paragraph.page, highlight: paragraph.bounds, token: 1, onPage: { _ in })
+        }
+        .frame(width: 560, height: 640)
+    }
+}
+
 struct ParagraphRow: View {
     let paragraph: Paragraph
     let number: Int
@@ -235,13 +285,23 @@ struct ParagraphRow: View {
     let fontSize: Double
     let active: Bool
     let highlighted: Bool
+    let pdf: PDFDocument?
     let ask: () -> Void
-    let showInPDF: () -> Void
+    let openInPDF: () -> Void
     @ViewState private var hovering = false
     @ViewState private var copied = false
+    @ViewState private var peeking = false
+    @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var pending: Bool { paragraph.translated.isEmpty }
+    /// The action bar shows for the mouse (hover) and for the keyboard (focus).
+    private var showsActions: Bool { hovering || focused }
+
+    /// Peek at the passage in the original without leaving the reading mode; full PDF mode if there is no document.
+    private func showInPDF() {
+        if pdf != nil { peeking = true } else { openInPDF() }
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
@@ -256,24 +316,40 @@ struct ParagraphRow: View {
             }
         }
         .padding(.vertical, 16).padding(.horizontal, 12)
-        .background(highlighted ? ReaderStyle.accent.opacity(0.14) : hovering ? Color.primary.opacity(0.035) : .clear,
+        .background(highlighted ? ReaderStyle.accent.opacity(0.14) : showsActions ? Color.primary.opacity(0.035) : .clear,
                     in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderStyle.accent.opacity(focused ? 0.8 : 0), lineWidth: 2)
+        }
         // Floats on the row's top edge (over the divider), so it never covers the first line of text.
         .overlay(alignment: .topTrailing) {
             actions.offset(x: -8, y: -13)
-                .opacity(hovering ? 1 : 0).scaleEffect(hovering || reduceMotion ? 1 : 0.94, anchor: .topTrailing)
-                .allowsHitTesting(hovering).accessibilityHidden(true)
+                .opacity(showsActions ? 1 : 0).scaleEffect(showsActions || reduceMotion ? 1 : 0.94, anchor: .topTrailing)
+                .allowsHitTesting(showsActions).accessibilityHidden(true)
         }
-        .zIndex(hovering ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
+        .zIndex(showsActions ? 1 : 0)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: showsActions)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: highlighted)
         .onHover { hovering = $0 }
+        // Reachable with Tab when Full Keyboard Access is on; a click still selects text instead of focusing.
+        .focusable(interactions: .activate)
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(.return) { showInPDF(); return .handled }
+        .onCopyCommand { [NSItemProvider(object: (pending ? paragraph.original : paragraph.translated) as NSString)] }
+        .popover(isPresented: $peeking, arrowEdge: .leading) {
+            if let pdf {
+                PDFPeek(pdf: pdf, paragraph: paragraph, number: number,
+                        close: { peeking = false }, openFull: { peeking = false; openInPDF() })
+            }
+        }
         .contextMenu {
             Button("Copiar tradução", systemImage: "doc.on.doc") { copy(paragraph.translated) }.disabled(pending)
             Button("Copiar original", systemImage: "doc.on.doc") { copy(paragraph.original) }
             Divider()
             Button("Perguntar sobre este trecho", systemImage: "sparkles", action: ask)
             Button("Mostrar no PDF original", systemImage: "doc.viewfinder", action: showInPDF)
+            Button("Abrir no modo PDF original", systemImage: "arrow.up.left.and.arrow.down.right", action: openInPDF)
         }
         // The hover bar is hidden from VoiceOver; offer the same actions on the paragraph itself.
         .accessibilityActions {
@@ -281,6 +357,7 @@ struct ParagraphRow: View {
             Button("Copiar original") { copy(paragraph.original) }
             Button("Perguntar sobre este trecho", action: ask)
             Button("Mostrar no PDF original", action: showInPDF)
+            Button("Abrir no modo PDF original", action: openInPDF)
         }
     }
 

@@ -13,7 +13,11 @@ final class ReaderModel: ObservableObject {
     @Published var source = "auto"
     @Published var detectedSource: String?
     @Published var languages: [Locale.Language] = []
-    @Published var selectedPage = 1
+    @Published var selectedPage = 1 {
+        didSet { if selectedPage != oldValue { pageForward = selectedPage > oldValue } }
+    }
+    /// Direction of the last page change, so the reader can slide the new page in from the right side.
+    private(set) var pageForward = true
     @Published var phase: Phase = .idle
     @Published var stopping = false
     @Published var status = "Pronto para um novo documento."
