@@ -5,3 +5,7 @@ Arquivo: `paragrafo-logo.png`. Gerado com a ferramenta nativa de imagens, com fu
 ## Prompt utilizado
 
 Use case: logo-brand. Create a refined minimalist logo for "Parágrafo", a native macOS app that translates PDFs paragraph by paragraph. A single finished logo lockup, not a presentation board. Transparent background. Symbol above wordmark, centered with generous but not excessive clear space. Symbol: an original elegant geometric pilcrow / letter P formed from two offset document-like strokes, subtly suggesting two parallel text columns and translation between paragraphs. Strong simple silhouette, beautifully balanced negative space, rounded corners, readable at small sizes. Flat solid muted forest green #386654 only. Beneath the symbol set the exact word "Parágrafo" with correct acute accent on á in a sophisticated contemporary serif typeface, carefully kerned, same green. Understated editorial identity, warm, intelligent, calm. Crisp vector-like edges. No gradients, shadows, 3D, mockups, decorative flourishes, extra text, borders or watermark. Output a high-resolution square PNG with genuine transparency.
+
+## Ícone com fundo branco
+
+`paragrafo-logo-white.png` é a versão com fundo branco, aplicada ao ícone `Paragrafo.icns`. Editada com a ferramenta nativa de imagens. Prompt: “Change ONLY the transparent background to solid pure white (#FFFFFF). Keep the existing green document/P symbol, serif wordmark Parágrafo, layout and proportions unchanged.” A versão transparente continua disponível para a interface.
