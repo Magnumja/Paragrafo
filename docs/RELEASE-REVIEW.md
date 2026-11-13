@@ -50,3 +50,5 @@ Local commands completed:
 - No stress test of thousands of scanned pages or every model was performed. Memory/CPU depends on document and model; pausing cancels the app's work but does not stop another Ollama client's work.
 - No universal Intel binary, Developer ID signing, notarization, automatic updates or crash telemetry is included.
 - Rollback: keep the previous app bundle and replace it if needed; the app's saved library is not automatically deleted or migrated destructively. The first public release has no earlier public release to roll back to.
+
+Reproduce the current extraction profile with `./benchmark-resources.sh` (synthetic PDF, removed on exit). Run several times on the same machine. `./benchmark.sh` measures only the historical metadata lookup paths, not complete frame rendering.

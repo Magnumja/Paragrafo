@@ -105,6 +105,13 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 - **Languages** are those Apple's Translation framework supports.
 - A synthetic 200-page text PDF was profiled; complex scans and very large documents still need testing. See [release review](docs/RELEASE-REVIEW.md).
 
+## Resource budgets
+
+- Release bundle under 50 MiB (enforced in CI; currently about 4.1 MiB).
+- Embeddings in bounded batches; output capped at 1,024 tokens.
+- AI model memory is separate and can exceed 3 GB with the default pair.
+- Run `./benchmark-resources.sh` to profile a synthetic 200-page text PDF.
+
 ## Build from source
 
 Requires macOS 15+ and Swift 6 (Xcode 16+ or the Command Line Tools). No third-party dependencies.
