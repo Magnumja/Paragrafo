@@ -6,45 +6,52 @@ import UniformTypeIdentifiers
 typealias ViewState<Value> = SwiftUI.State<Value>
 typealias ReaderStateObject<Value: ObservableObject> = SwiftUI.StateObject<Value>
 
+/// PDFs opened from Finder ("Abrir com") or dropped on the Dock icon arrive here.
+@MainActor
+final class OpenRequests: NSObject, NSApplicationDelegate, ObservableObject {
+    /// A path given on the command line opens that PDF at launch.
+    @Published var pending: URL? = CommandLine.arguments.dropFirst().first { $0.lowercased().hasSuffix(".pdf") }.map { URL(fileURLWithPath: $0) }
+
+    func application(_ application: NSApplication, open urls: [URL]) { request(urls) }
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        request(filenames.map { URL(fileURLWithPath: $0) })
+        sender.reply(toOpenOrPrint: .success)
+    }
+    private func request(_ urls: [URL]) {
+        if let url = urls.first(where: { $0.pathExtension.lowercased() == "pdf" }) { pending = url }
+    }
+}
+
 @main
 struct ParagrafoApp: App {
+    @NSApplicationDelegateAdaptor private var requests: OpenRequests
     var body: some Scene {
-        WindowGroup { ContentView().frame(minWidth: 780, minHeight: 580) }
-            .defaultSize(width: 1160, height: 800)
+        // One window: a PDF opened from Finder goes to it instead of spawning an empty second one.
+        Window("Parágrafo", id: "leitor") { ContentView().frame(minWidth: 880, minHeight: 600) }
+            .defaultSize(width: 1400, height: 880)
     }
 }
 
 struct ContentView: View {
     @ReaderStateObject private var model = ReaderModel()
+    @ReaderStateObject private var assistant = DocumentAssistant()
+    @EnvironmentObject private var requests: OpenRequests
     @ViewState private var importing = false
-    @ViewState private var translationOnly = false
-    @ViewState private var fontSize = 17.0
     @ViewState private var dropTarget = false
+    @AppStorage("readingMode") private var mode = ReadingMode.parallel
+    @AppStorage("fontSize") private var fontSize = 17.0
+    @AppStorage("showAssistant") private var showAssistant = true
 
     var body: some View {
-        VStack(spacing: 0) {
+        Group {
             if model.document.isEmpty {
-                EmptyReader(importing: model.phase == .importing, open: { importing = true })
+                EmptyReader(model: model, open: { importing = true }).background { ReaderBackdrop() }
             } else {
-                HStack(spacing: 0) {
-                    sidebar
-                    readingPane
-                }
+                workspace
             }
-            statusBar
         }
-        .background { ReaderBackdrop() }
         .tint(ReaderStyle.accent)
-        .navigationTitle("Parágrafo")
-        .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                Button("Abrir PDF", systemImage: "folder") { importing = true }
-                    .keyboardShortcut("o").disabled(model.busy)
-                Button("Exportar", systemImage: "square.and.arrow.up") { model.export() }
-                    .keyboardShortcut("e", modifiers: [.command, .shift])
-                    .disabled(model.document.completed == 0 || model.busy)
-            }
-        }
+        .navigationTitle(model.document.isEmpty ? "Parágrafo" : model.filename)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf]) { result in
             switch result {
             case .success(let url): model.load(url)
@@ -58,7 +65,8 @@ struct ContentView: View {
         } isTargeted: { dropTarget = $0 }
         .overlay {
             if dropTarget && !model.busy {
-                RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderStyle.accent, style: StrokeStyle(lineWidth: 3, dash: [8]))
+                RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderStyle.accent, style: StrokeStyle(lineWidth: 3, dash: [8]))
+                    .background(ReaderStyle.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                     .padding(10).allowsHitTesting(false)
             }
         }
@@ -67,141 +75,99 @@ struct ContentView: View {
         } message: { Text(model.error ?? "") }
         .task { await model.loadLanguages() }
         .translationTask(model.configuration) { session in await model.translate(using: session) }
-        .onChange(of: model.target) { _, _ in model.changeTarget() }
-        .onChange(of: model.source) { _, _ in model.changeTarget() }
+        .onChange(of: model.fingerprint) { _, fingerprint in
+            assistant.attach(paragraphs: model.document.paragraphs, fingerprint: fingerprint)
+        }
+        .onChange(of: requests.pending, initial: true) { _, _ in openPending() }
+        .onChange(of: model.busy) { _, _ in openPending() }
         .onDisappear { if model.busy { model.stop() } }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 10) {
-                Image(systemName: "doc.text").font(.title2).foregroundStyle(ReaderStyle.accent)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.filename).font(.headline).lineLimit(2).help(model.filename)
-                    Text("\(model.document.pages.count) páginas com texto").font(.caption).foregroundStyle(.secondary)
+    private var workspace: some View {
+        NavigationSplitView {
+            Sidebar(model: model).navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 360)
+        } detail: {
+            reading
+                .inspector(isPresented: $showAssistant) {
+                    AssistantPanel(assistant: assistant, translations: { model.document.paragraphs.map(\.translated) }, open: follow)
+                        .inspectorColumnWidth(min: 300, ideal: 380, max: 540)
                 }
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                sectionTitle("IDIOMA DE ORIGEM")
-                Picker("Idioma de origem", selection: $model.source) {
-                    Text(model.detectedSource.map { "Automático · " + languageName($0) } ?? "Detectar automaticamente").tag("auto")
-                    ForEach(model.languages, id: \.minimalIdentifier) { language in
-                        Text(languageName(language.minimalIdentifier)).tag(language.minimalIdentifier)
-                    }
-                }.labelsHidden().disabled(model.busy).frame(maxWidth: .infinity)
-                sectionTitle("IDIOMA DE DESTINO")
-                Picker("Idioma de destino", selection: $model.target) {
-                    if model.languages.isEmpty { Text("Português").tag("pt") }
-                    ForEach(model.languages, id: \.minimalIdentifier) { language in
-                        Text(languageName(language.minimalIdentifier)).tag(language.minimalIdentifier)
-                    }
-                }.labelsHidden().disabled(model.busy).frame(maxWidth: .infinity)
-            }
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    sectionTitle("TRADUÇÃO")
-                    Spacer()
-                    Text("\(Int(progress * 100))%") .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                }
-                ProgressView(value: progress).accessibilityLabel("Progresso da tradução")
-                Text("\(model.document.completed) de \(model.document.count) parágrafos").font(.caption).foregroundStyle(.secondary)
-                if model.busy {
-                    Button(model.stopping ? "Aguarde…" : "Pausar", systemImage: "pause.fill") { model.stop() }
-                        .disabled(model.stopping).frame(maxWidth: .infinity)
-                } else {
-                    Button(model.document.completed == model.document.count ? "Concluído" : model.document.completed > 0 ? "Continuar tradução" : "Traduzir documento", systemImage: model.document.completed == model.document.count ? "checkmark" : "character.bubble") {
-                        model.startTranslation()
-                    }.readerPrimaryAction().controlSize(.large)
-                        .disabled(model.document.completed == model.document.count)
-                }
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("LEITURA")
-                Toggle("Só tradução", isOn: $translationOnly).toggleStyle(.switch).controlSize(.small)
-                HStack {
-                    Text("Texto").foregroundStyle(.secondary)
-                    Spacer()
-                    Button { fontSize = max(14, fontSize - 1) } label: { Image(systemName: "textformat.size.smaller") }
-                        .accessibilityLabel("Diminuir texto").disabled(fontSize <= 14)
-                    Text("\(Int(fontSize))").font(.caption.monospacedDigit()).frame(width: 20)
-                    Button { fontSize = min(24, fontSize + 1) } label: { Image(systemName: "textformat.size.larger") }
-                        .accessibilityLabel("Aumentar texto").disabled(fontSize >= 24)
-                }
-            }.font(.callout)
-            Spacer(minLength: 10)
-            Label("Processado no Mac", systemImage: "lock.shield")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("A tradução automática pode conter erros. Compare os trechos antes de usar.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        .padding(22).frame(width: 250).frame(maxHeight: .infinity)
-        .readerGlass(radius: 22)
-        .padding(.leading, 12).padding(.vertical, 12)
-    }
-
-    private var readingPane: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(translationOnly ? "Sua tradução" : "Uma leitura, dois idiomas.")
-                        .font(.system(size: 23, weight: .medium, design: .serif))
-                    Text(translationOnly ? "Leitura contínua, parágrafo por parágrafo." : "O original sempre ao alcance dos olhos.")
-                        .font(.caption).foregroundStyle(.secondary)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button("Início", systemImage: "house") { model.close() }
+                    .help("Voltar à tela inicial. O progresso fica salvo.").disabled(model.busy)
+            }
+            ToolbarItem(placement: .principal) {
+                Picker("Modo de leitura", selection: $mode) {
+                    ForEach(ReadingMode.allCases) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).help("Modo de leitura")
+            }
+            ToolbarItemGroup {
+                ControlGroup {
+                    Button("Página anterior", systemImage: "chevron.left") { model.movePage(-1) }
+                        .keyboardShortcut("[").disabled(model.selectedPage == model.document.pages.first)
+                    Button("Próxima página", systemImage: "chevron.right") { model.movePage(1) }
+                        .keyboardShortcut("]").disabled(model.selectedPage == model.document.pages.last)
                 }
-                Spacer()
-                pageNavigation
-            }.padding(24)
-            Divider()
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    if !model.notice.isEmpty {
-                        Label(model.notice, systemImage: "info.circle")
-                            .font(.caption).foregroundStyle(.secondary).padding(.bottom, 2)
+                ControlGroup {
+                    Button("Diminuir texto", systemImage: "textformat.size.smaller") { fontSize = max(14, fontSize - 1) }
+                        .keyboardShortcut("-").disabled(fontSize <= 14 || mode == .original)
+                    Button("Aumentar texto", systemImage: "textformat.size.larger") { fontSize = min(24, fontSize + 1) }
+                        .keyboardShortcut("+").disabled(fontSize >= 24 || mode == .original)
+                }
+                Menu("Exportar", systemImage: "square.and.arrow.up") {
+                    ForEach(ExportFormat.allCases) { format in
+                        Button(format.title, systemImage: format.symbol) { model.export(format) }
                     }
-                    ForEach(model.document.pageRanges[model.selectedPage] ?? 0..<0, id: \.self) { index in
-                        ParagraphCard(paragraph: model.document.paragraphs[index], number: index + 1,
-                                      targetName: languageName(model.target), translationOnly: translationOnly, fontSize: fontSize)
-                    }
-                }.padding(24).frame(maxWidth: 1100).frame(maxWidth: .infinity)
-            }.id(model.selectedPage)
+                }.disabled(model.document.completed == 0 || model.busy).help("Exportar a tradução").accessibilityLabel("Exportar")
+                Button("Abrir PDF", systemImage: "folder") { importing = true }
+                    .keyboardShortcut("o").disabled(model.busy)
+            }
+            ToolbarItem {
+                Button("Perguntar", systemImage: "sparkles") { showAssistant.toggle() }
+                    .keyboardShortcut("k").help("Mostrar ou ocultar o assistente (⌘K)")
+            }
         }
     }
 
-    private var pageNavigation: some View {
-        HStack(spacing: 8) {
-            Button { movePage(-1) } label: { Image(systemName: "chevron.left") }
-                .accessibilityLabel("Página anterior").disabled(model.selectedPage == model.document.pages.first)
-            Picker("Página", selection: $model.selectedPage) {
-                ForEach(model.document.pages, id: \.self) { Text("Página \($0)").tag($0) }
-            }.labelsHidden().frame(width: 115)
-            Button { movePage(1) } label: { Image(systemName: "chevron.right") }
-                .accessibilityLabel("Próxima página").disabled(model.selectedPage == model.document.pages.last)
-        }.controlSize(.small).padding(10).readerGlass(radius: 16)
+    @ViewBuilder private var reading: some View {
+        if mode == .original {
+            PDFPane(document: model.pdf, page: model.selectedPage,
+                    highlight: model.highlightBounds,
+                    token: model.revealToken) { page in
+                if page != model.selectedPage, model.document.pageRanges[page] != nil { model.selectedPage = page }
+            }
+        } else {
+            BilingualPage(model: model, translationOnly: mode == .translation, fontSize: fontSize, ask: ask) { index in
+                mode = .original
+                model.reveal(paragraphs: index..<(index + 1))
+            }
+        }
     }
 
-    private var statusBar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                if model.busy { ProgressView().controlSize(.small) }
-                else { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(ReaderStyle.accent) }
-                Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                Spacer()
-                if model.phase == .importing {
-                    ProgressView(value: model.importProgress).frame(width: 100)
-                    Button("Cancelar") { model.stop() }.disabled(model.stopping).controlSize(.small)
-                }
-            }.padding(.horizontal, 22).padding(.vertical, 12)
-        }.readerGlass(radius: 14).padding(.horizontal, 12).padding(.bottom, 10)
+    /// A link inside an answer: go to the cited passage or page.
+    private func follow(_ destination: AnswerFormatter.Destination, in message: ChatMessage) {
+        switch destination {
+        case .source(let number):
+            guard message.sources.indices.contains(number - 1) else { return }
+            model.reveal(paragraphs: message.sources[number - 1].chunk.paragraphs)
+        case .page(let page):
+            model.reveal(page: page)
+        }
     }
 
-    private var progress: Double { Double(model.document.completed) / Double(max(1, model.document.count)) }
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text).font(.system(size: 10, weight: .semibold)).tracking(1.3).foregroundStyle(.secondary)
+    /// A PDF requested from Finder waits for the current import or translation to finish.
+    private func openPending() {
+        guard let url = requests.pending, !model.busy else { return }
+        requests.pending = nil
+        model.load(url)
     }
-    private func movePage(_ offset: Int) {
-        guard let index = model.document.pages.firstIndex(of: model.selectedPage), model.document.pages.indices.contains(index + offset) else { return }
-        model.selectedPage = model.document.pages[index + offset]
+
+    private func ask(_ index: Int) {
+        let paragraph = model.document.paragraphs[index]
+        showAssistant = true
+        assistant.ask("Explique em linguagem simples este trecho da página \(paragraph.page): «\(paragraph.original.prefix(280))»",
+                      translations: model.document.paragraphs.map(\.translated), overview: false)
     }
 }

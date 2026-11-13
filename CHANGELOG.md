@@ -1,5 +1,20 @@
 # Histórico
 
+## 0.3.0 — 2026-11-13
+
+- Revisão de segurança: armazenamento contido na biblioteca, limites de vetores, conexões Ollama somente locais, bloqueio de links externos do modelo.
+- Retenção dos modelos reduzida de 30 para 2 minutos; resposta limitada a 1.024 tokens e extração com liberação temporária por página.
+- Primeira publicação no GitHub com CI macOS, política de segurança, documentação bilíngue e checksum da release.
+
+- **Perguntar ao documento:** painel de perguntas com modelo Llama local (Ollama) e busca híbrida nos trechos do PDF. Respostas com citações clicáveis que levam ao parágrafo e o marcam, inclusive sobre o PDF original.
+- **Síntese geral** do documento com pontos ligados aos trechos de origem; documentos longos são lidos em partes.
+- **Trabalho salvo por arquivo:** tradução, índice de busca e síntese voltam ao reabrir o PDF. Tela inicial com recentes.
+- **Nova interface:** barra lateral com páginas e progresso, leitura em colunas, modos Lado a lado / Tradução / PDF original, ações por parágrafo.
+- A tradução começa pela página em leitura.
+- Exportação em PDF traduzido e Markdown bilíngue, além do texto.
+- Extração: títulos separados do corpo pelo tamanho da fonte; palavras hifenizadas no fim da linha reunidas.
+- Abrir PDFs pelo Finder ("Abrir com") e pela linha de comando.
+
 ## Visual de vidro — 2026-11-12
 
 - Liquid Glass nativo na barra lateral, navegação e status em macOS compatível.

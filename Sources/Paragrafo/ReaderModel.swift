@@ -1,4 +1,6 @@
 import SwiftUI
+import PDFKit
+import CryptoKit
 @preconcurrency import Translation
 import UniformTypeIdentifiers
 
@@ -19,6 +21,17 @@ final class ReaderModel: ObservableObject {
     @Published var error: String?
     @Published var configuration: TranslationSession.Configuration?
     @Published var importProgress = 0.0
+    /// Paragraph being translated right now.
+    @Published private(set) var active: Int?
+    /// Paragraph the reader was sent to (from an answer's source); `revealToken` changes on every jump.
+    @Published private(set) var highlighted: Range<Int>?
+    @Published private(set) var revealToken = 0
+    @Published private(set) var fingerprint = ""
+    @Published private(set) var pdf: PDFDocument?
+    @Published private(set) var pageCount = 0
+    @Published private(set) var recents = Library.recents()
+    private var fileURL: URL?
+    private var contentKey = ""
     private var importTask: Task<Extracted, Error>?
     private var importID = UUID()
     private var sessionRunning = false
@@ -47,16 +60,39 @@ final class ReaderModel: ObservableObject {
             do {
                 let result = try await worker.value
                 try Task.checkCancellation()
-                guard importID == id, !stopping else { return }
-                document = DocumentState(result.paragraphs)
-                detectedSource = TranslationInput.detectLanguage(in: result.paragraphs)
-                selectedPage = document.pages.first ?? 1
-                filename = url.lastPathComponent
-                status = "\(document.count) parágrafos prontos para traduzir."
-                notice = result.ocrPages > 0 ? "OCR usado em \(result.ocrPages) página(s). Confira o texto reconhecido." : "Confira a ordem de leitura em tabelas e documentos com colunas."
-                if !result.emptyPages.isEmpty {
-                    notice += " Sem texto nas páginas: \(result.emptyPages.map(String.init).joined(separator: ", "))."
+                guard importID == id, !stopping else { status = "Importação cancelada."; return }
+                var paragraphs = result.paragraphs
+                detectedSource = TranslationInput.detectLanguage(in: paragraphs)
+                // Reopening the same file brings back the work already done.
+                let saved = Library.load(result.fingerprint)
+                var restored = 0
+                let key = Self.contentKey(paragraphs)
+                if let saved, saved.contentKey == key, saved.translations.count == paragraphs.count {
+                    for index in paragraphs.indices { paragraphs[index].translated = saved.translations[index] }
+                    restored = saved.translations.lazy.filter { !$0.isEmpty }.count
+                    source = saved.source
+                    target = saved.target
+                } else {
+                    source = "auto"
+                    // Same file, different extraction: what was saved no longer lines up with the text.
+                    if saved != nil { Library.remove(result.fingerprint) }
                 }
+                contentKey = key
+                document = DocumentState(paragraphs)
+                selectedPage = document.pages.first ?? 1
+                highlighted = nil
+                filename = url.lastPathComponent
+                fileURL = url
+                pageCount = result.pageCount
+                pdf = PDFDocument(url: url)
+                fingerprint = result.fingerprint
+                status = restored > 0 ? "\(restored) de \(document.count) parágrafos já traduzidos foram restaurados."
+                    : "\(document.count) parágrafos prontos para traduzir."
+                notice = result.ocrPages > 0 ? "OCR usado em \(result.ocrPages) página(s). Confira o texto reconhecido." : ""
+                if !result.emptyPages.isEmpty {
+                    notice += (notice.isEmpty ? "" : " ") + "Sem texto nas páginas: \(result.emptyPages.map(String.init).joined(separator: ", "))."
+                }
+                persist()
             } catch is CancellationError {
                 status = "Importação cancelada."
             } catch {
@@ -64,6 +100,36 @@ final class ReaderModel: ObservableObject {
                 status = "Não foi possível importar o PDF."
             }
         }
+    }
+
+    func open(_ recent: RecentDocument) {
+        let url = URL(fileURLWithPath: recent.path)
+        guard FileManager.default.fileExists(atPath: recent.path) else {
+            Library.remove(recent.id)
+            recents = Library.recents()
+            error = "“\(recent.name)” não está mais em \(url.deletingLastPathComponent().path). Abra o arquivo novamente."
+            return
+        }
+        load(url)
+    }
+
+    func forget(_ recent: RecentDocument) {
+        Library.remove(recent.id)
+        recents = Library.recents()
+    }
+
+    /// Back to the start screen. The work stays saved.
+    func close() {
+        guard !busy else { return }
+        persist()
+        document = DocumentState()
+        filename = ""
+        fingerprint = ""
+        pdf = nil
+        fileURL = nil
+        highlighted = nil
+        notice = ""
+        status = "Pronto para um novo documento."
     }
 
     func stop() {
@@ -80,22 +146,35 @@ final class ReaderModel: ObservableObject {
         }
     }
 
+    func choose(source: String) {
+        guard !busy, source != self.source else { return }
+        self.source = source
+        changeTarget()
+    }
+
+    func choose(target: String) {
+        guard !busy, target != self.target else { return }
+        self.target = target
+        changeTarget()
+    }
+
     func changeTarget() {
         guard !busy else { return }
         document.clearTranslations()
         status = "Idiomas alterados. Pronto para traduzir."
+        persist()
     }
 
     func startTranslation() {
         guard !busy, !document.isEmpty, document.completed < document.count else { return }
         let origin = source == "auto" ? detectedSource : source
         if let origin, TranslationInput.sameLanguage(origin, target) {
-            error = "A origem e o destino são o mesmo idioma. Se o documento está em inglês, escolha Inglês em Idioma de origem e Português no destino."
+            error = "A origem e o destino são o mesmo idioma. Se o documento está em inglês, escolha Inglês como origem e Português como destino."
             status = "Escolha idiomas diferentes para traduzir."
             return
         }
         if origin == nil && document.paragraphs.contains(where: { TranslationInput.needsTranslation($0.original) }) {
-            error = "Não foi possível identificar a língua do documento. Escolha o Idioma de origem na barra lateral."
+            error = "Não foi possível identificar a língua do documento. Escolha o idioma de origem na barra lateral."
             return
         }
         // Preserve numbers/punctuation without asking the language detector to classify them.
@@ -120,18 +199,19 @@ final class ReaderModel: ObservableObject {
     func translate(using session: TranslationSession) async {
         guard phase == .translating else { return }
         sessionRunning = true
-        defer { phase = .idle; stopping = false; sessionRunning = false }
+        defer { phase = .idle; stopping = false; sessionRunning = false; active = nil; persist() }
         do {
-            // Source is inferred from document text or explicitly chosen, not from its first heading.
-            // Keeping calls sequential preserves paragraph order and pause boundaries.
-            for index in document.paragraphs.indices {
+            // Measured: batches and parallel sessions do not speed up the system engine (see PERF.md).
+            // Sequential calls keep pause boundaries exact; the page being read goes first.
+            for (step, index) in document.pendingOrder(from: selectedPage).enumerated() {
                 try Task.checkCancellation()
                 if stopping { break }
-                guard document.paragraphs[index].translated.isEmpty else { continue }
-                status = "Traduzindo parágrafo \(index + 1) de \(document.count)…"
+                active = index
+                status = "Traduzindo · \(document.completed + 1) de \(document.count)"
                 let response = try await session.translate(document.paragraphs[index].original)
                 try Task.checkCancellation()
                 document.apply(response.targetText, at: index)
+                if step % 20 == 19 { persist() }
             }
             status = stopping ? "Tradução pausada. Seu progresso foi mantido." : "Tradução concluída. Revise comparando com o original."
         } catch is CancellationError {
@@ -139,7 +219,7 @@ final class ReaderModel: ObservableObject {
         } catch let error as CocoaError where error.code == .userCancelled {
             status = "Tradução pausada. Continue quando os idiomas estiverem disponíveis."
         } catch TranslationError.unableToIdentifyLanguage {
-            error = "Não foi possível identificar o idioma. Selecione Inglês em Idioma de origem e tente novamente."
+            error = "Não foi possível identificar o idioma. Selecione o idioma de origem e tente novamente."
             status = "Escolha o idioma de origem."
         } catch TranslationError.unsupportedSourceLanguage {
             error = "O idioma de origem não é suportado pelo tradutor do macOS. Confira o idioma selecionado."
@@ -157,27 +237,77 @@ final class ReaderModel: ObservableObject {
     func loadLanguages() async {
         let supported = await availableLanguages()
         languages = supported.sorted { languageName($0.minimalIdentifier) < languageName($1.minimalIdentifier) }
-        if !languages.contains(where: { $0.minimalIdentifier == target }),
+        if document.isEmpty, !languages.contains(where: { $0.minimalIdentifier == target }),
            let portuguese = languages.first(where: { $0.languageCode?.identifier == "pt" }) {
             target = portuguese.minimalIdentifier
         }
     }
 
-    func export() {
+    /// Jump to a passage and mark it, e.g. from a source cited in an answer.
+    func reveal(paragraphs range: Range<Int>) {
+        let range = range.clamped(to: 0..<document.count)
+        guard !range.isEmpty else { return }
+        selectedPage = document.paragraphs[range.lowerBound].page
+        highlighted = range
+        revealToken += 1
+    }
+
+    func reveal(page: Int) {
+        guard document.pageRanges[page] != nil else { return }
+        selectedPage = page
+        highlighted = nil
+        revealToken += 1
+    }
+
+    /// Area of the marked passage on the page being shown, for the original PDF.
+    var highlightBounds: CGRect? {
+        guard let highlighted else { return nil }
+        let area = highlighted.compactMap { document.paragraphs[$0].page == selectedPage ? document.paragraphs[$0].bounds : nil }
+            .reduce(CGRect.null) { $0.union($1) }
+        return area.isNull ? nil : area
+    }
+
+    func movePage(_ offset: Int) {
+        guard let index = document.pages.firstIndex(of: selectedPage), document.pages.indices.contains(index + offset) else { return }
+        selectedPage = document.pages[index + offset]
+    }
+
+    func export(_ format: ExportFormat) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent + " — tradução.txt"
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent + " — tradução." + format.fileExtension
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let text = "\(filename)\nTradução para \(languageName(target)) · \(document.completed)/\(document.count) parágrafos\n\n" + document.paragraphs.enumerated().map { index, paragraph in
-            "Página \(paragraph.page) · Parágrafo \(index + 1)\n\nORIGINAL\n\(paragraph.original)\n\nTRADUÇÃO\n\(paragraph.translated.isEmpty ? "[Não traduzido]" : paragraph.translated)"
-        }.joined(separator: "\n\n————————————\n\n")
-        do { try text.write(to: url, atomically: true, encoding: .utf8) }
-        catch { self.error = error.localizedDescription }
+        do {
+            let data = Exporter.data(format, filename: filename, targetName: languageName(target), document: document)
+            guard !data.isEmpty else { error = "Não foi possível gerar o arquivo."; return }
+            try data.write(to: url, options: .atomic)
+            status = "Exportado para \(url.lastPathComponent)."
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private static func contentKey(_ paragraphs: [Paragraph]) -> String {
+        SHA256.hash(data: Data(paragraphs.map(\.original).joined(separator: "\u{1F}").utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func persist() {
+        guard !fingerprint.isEmpty, !document.isEmpty else { return }
+        var saved = Library.load(fingerprint) ?? SavedDocument(name: filename, path: fileURL?.path ?? "", pages: pageCount,
+                                                              source: source, target: target, translations: [])
+        saved.name = filename
+        saved.path = fileURL?.path ?? saved.path
+        saved.pages = pageCount
+        saved.source = source
+        saved.target = target
+        saved.translations = document.paragraphs.map(\.translated)
+        saved.contentKey = contentKey
+        saved.opened = Date()
+        Library.save(saved, fingerprint: fingerprint)
+        recents = Library.recents()
     }
 }
 
 func languageName(_ code: String) -> String {
-    Locale(identifier: "pt_BR").localizedString(forIdentifier: code) ?? code
+    Locale(identifier: "pt_BR").localizedString(forIdentifier: code)?.capitalized(with: Locale(identifier: "pt_BR")) ?? code
 }
 
 private func availableLanguages() async -> [Locale.Language] {

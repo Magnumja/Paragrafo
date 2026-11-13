@@ -38,3 +38,37 @@ Testes cobrem intervalos de páginas, atualização repetida, respostas vazias, 
 ## Validação final da aplicação
 
 Build de produção e 15 verificações concluídos. Na UI, um PDF de dois parágrafos em inglês foi importado, traduzido para português e exportado em TXT; o número 1250 e os dois pares de trechos permaneceram no resultado. Os modelos de inglês/português foram baixados pelo macOS durante a validação. Contraste no modo escuro, modo só tradução e ajuste de tamanho de texto foram conferidos.
+
+## Motor de tradução — 2026-11-13
+
+Hipótese testada antes de mudar o fluxo: a API de lote ou sessões paralelas acelerariam a tradução. Medido fora da interface com `TranslationSession(installedSource:target:)`, 24 parágrafos de ~170 caracteres, inglês → português, Apple M5:
+
+| Estratégia | Tempo total |
+|---|---:|
+| Sequencial, uma sessão | 15,6 s e 18,9 s (duas execuções) |
+| `translate(batch:)`, uma sessão | 14,3 s |
+| 2 sessões em paralelo | 14,3 s |
+| 4 sessões em paralelo | 14,2 s |
+
+O motor do sistema processa cerca de 0,6 s por parágrafo independentemente da estratégia; a diferença entre as linhas está dentro da variação entre execuções. **Decisão:** manter chamadas sequenciais, que dão pausa exata por parágrafo. O ganho percebido vem de outro lugar: a tradução começa pela página em leitura, e o que já foi traduzido fica salvo e não é refeito.
+
+## Assistente — 2026-11-13
+
+Medido com `./check-rag.sh` e `./check-assistant.sh`, Apple M5 16 GB, `bge-m3` e `llama3.2:3b` no Ollama 0.40:
+
+| Operação | Medida |
+|---|---:|
+| Indexar 8 trechos (embeddings) | 0,16–0,33 s |
+| Embedding da pergunta | ~0,02 s |
+| Resposta completa a uma pergunta, modelo quente | 0,9–1,5 s |
+| Primeiro token com o modelo frio | ~6,6 s (carga do modelo) |
+| Síntese de documento curto, passagem única | ~6 s |
+| Síntese em 3 partes | ~13 s |
+| Restaurar o índice do disco ao reabrir | 0,04 s |
+
+Documento de teste pequeno (6 seções). Não há medição com documentos de centenas de páginas; o tempo de indexação e de síntese cresce com o tamanho.
+
+
+## Revisão da release 0.3.0 — 2026-11-13
+
+Medições novas, política de retenção dos modelos e limites estão em [docs/RELEASE-REVIEW.md](docs/RELEASE-REVIEW.md). O benchmark de metadados da primeira versão é histórico e não representa uma medição do app completo.

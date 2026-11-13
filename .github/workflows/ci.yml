@@ -1,0 +1,38 @@
+name: macOS checks
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Toolchain
+        run: swift --version
+      - name: Secret and path hygiene
+        run: python3 scripts/audit-source.py
+      - name: Extraction, storage and export
+        run: ./check.sh
+      - name: Translation lifecycle
+        run: ./check-model.sh
+      - name: Retrieval and network policy (live inference skips without Ollama)
+        run: ./check-rag.sh
+      - name: Assistant smoke checks (live inference skips without Ollama)
+        run: ./check-assistant.sh
+      - name: XCTest
+        run: swift test
+      - name: Release build
+        run: ./build-app.sh
+      - name: Bundle signature and size budget
+        run: |
+          codesign --verify --strict 'dist/Parágrafo.app'
+          test "$(du -sk 'dist/Parágrafo.app' | cut -f1)" -lt 51200
